@@ -1,0 +1,16 @@
+pm_to_blib
+blib
+tmp
+EV-Scribe-*
+tmp/test
+!tmp/test.c
+*.o
+*.c
+*.bs
+*~
+MYMETA.*
+Makefile
+Makefile.old
+MANIFEST.bak
+core
+dist/*

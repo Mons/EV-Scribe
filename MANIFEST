@@ -1,0 +1,8 @@
+Changes
+Makefile.PL
+MANIFEST
+ppport.h
+README
+Scribe.xs
+t/EV-Scribe.t
+lib/EV/Scribe.pm

@@ -2,6 +2,7 @@
 #define XSMY_H
 #define NEED_my_snprintf
 #include "ppport.h"
+
 #include "xsendian.h"
 #include <stdio.h>
 
@@ -50,8 +51,13 @@ typedef
 #endif
 
 #ifndef cwarn
+#include <sys/types.h>
+#include <sys/time.h>
+#include <unistd.h>
 #define cwarn(fmt, ...)   do{ \
-	fprintf(stderr, "[WARN] %s:%d: ", __FILE__, __LINE__); \
+	struct timeval __cwarn_tv; \
+	gettimeofday(&__cwarn_tv,0);\
+	fprintf(stderr, "%d: [WARN] @%zu.%06zu %s:%d: ",getpid(), (uintmax_t)__cwarn_tv.tv_sec,(uintmax_t)__cwarn_tv.tv_usec, __FILE__, __LINE__); \
 	fprintf(stderr, fmt, ##__VA_ARGS__); \
 	if (fmt[strlen(fmt) - 1] != 0x0a) { fprintf(stderr, "\n"); } \
 	} while(0)

@@ -5,11 +5,12 @@
 #define NEED_sv_2pv_flags_GLOBAL
 #include "ppport.h"
 
+#include "xsmy.h"
+
 #include "EVAPI.h"
 #define XSEV_CON_HOOKS 1
 #include "xsevcnn.h"
 
-#include "xsmy.h"
 
 static const int VERSION_1    = 0x80010000;
 #define VERSION_MASK 0xffff0000
@@ -391,15 +392,11 @@ void DESTROY(SV *this)
 		if (0) this = this;
 		xs_ev_cnn_self(ScCnn);
 		
-		if (PL_dirty)
-			return;
-		
-		if (self->reqs) {
+		if (!PL_dirty && self->reqs) {
 			//TODO
 			free_reqs(self, "Destroyed");
 			SvREFCNT_dec(self->reqs);
 		}
-		
 		xs_ev_cnn_destroy(self);
 
 void log (SV *this, AV * messages,  SV * cb)

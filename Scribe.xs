@@ -15,6 +15,10 @@
 static const int VERSION_1    = 0x80010000;
 #define VERSION_MASK 0xffff0000
 
+#ifndef WBUF_MAX
+#  define WBUF_MAX 10240
+#endif
+
 enum TType {
   T_STOP       = 0,
   T_VOID       = 1,
@@ -48,6 +52,7 @@ typedef struct {
 	uint32_t pending;
 	uint32_t seq;
 	HV      *reqs;
+	size_t   wbuf_limit;
 } ScCnn;
 
 typedef struct {
@@ -285,14 +290,18 @@ static inline SV * pkt_log( ScCtx *ctx, uint32_t iid, AV * messages, SV *cb ) {
 				var_len -= MSG_CAT_DEFAULT_SIZE; // free reserved var
 			}
 			if (msg && *msg && SvOK(*msg)) {
-				pvx = SvPV(*msg,len);
+				if (!SvROK(*msg)) {
+					pvx = SvPV(*msg,len);
+				} else {
+					pvx = SvPV(SvRV(*msg), len);
+				}
 				var_len += len - MSG_CAT_DEFAULT_SIZE;
 				uptr_sv_check( p, rv, const_len + var_len );
 				
 				*(p.c++) = T_STRING;
 				*(p.s++) = htobe16(2);
 				*(p.i++) = htobe32( len );
-				memcpy(p.c,pvx, len);
+				memcpy(p.c, pvx, len);
 				p.c += len;
 			} else {
 				var_len -= MSG_MSG_DEFAULT_SIZE; // free reserved var
@@ -316,6 +325,7 @@ static inline SV * pkt_log( ScCtx *ctx, uint32_t iid, AV * messages, SV *cb ) {
 }
 
 void free_reqs (ScCnn *self, const char * message) {
+	if (unlikely(!self->reqs)) return;
 	
 	ENTER;SAVETMPS;
 	
@@ -382,7 +392,20 @@ void new(SV *pk, HV *conf)
 		xs_ev_cnn_new(ScCnn);
 		self->cnn.on_read = (c_cb_read_t) on_read;
 		self->on_disconnect_before = ( void (*)(void *,int) ) on_disconnect;
-		
+		SV **key;
+		if ((key = hv_fetchs(conf, "wbuf_limit", 0))) {
+			if (SvOK(*key)) {
+				IV wbuf_limit = SvIV(*key);
+				self->wbuf_limit = wbuf_limit > 0 ? wbuf_limit : 0;
+			} else {
+				self->wbuf_limit = WBUF_MAX;
+			}
+		}
+		if ((key = hv_fetchs(conf, "write_immediately", 0)) && SvOK(*key)) {
+			self->cnn.wnow = SvTRUE(*key) ? 1 : 0;
+		} else {
+			self->cnn.wnow = 0;
+		}
 		self->reqs = newHV();
 		
 		XSRETURN(1);
@@ -396,6 +419,7 @@ void DESTROY(SV *this)
 			//TODO
 			free_reqs(self, "Destroyed");
 			SvREFCNT_dec(self->reqs);
+			self->reqs = 0;
 		}
 		xs_ev_cnn_destroy(self);
 
@@ -403,7 +427,8 @@ void log (SV *this, AV * messages,  SV * cb)
 	PPCODE:
 		if (0) this = this;
 		xs_ev_cnn_self(ScCnn);
-		xs_ev_cnn_checkconn(self,cb);
+		xs_ev_cnn_checkconn_wlimit(self,cb,self->wbuf_limit);
+		
 		dSVX(ctxsv, ctx, ScCtx);
 		sv_2mortal(ctxsv);
 		ctx->call = "logx";

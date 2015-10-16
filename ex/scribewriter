@@ -1,0 +1,163 @@
+#!/usr/bin/env perl
+
+use 5.010;
+use strict;
+use EV;
+use lib qw(../blib/lib ../blib/arch);
+use EV::Scribe;
+use Getopt::Long;
+use Time::HiRes qw(time sleep);
+use POSIX qw( strftime );
+use Time::Local qw( timelocal_nocheck timegm_nocheck );
+
+use Fcntl 'O_NONBLOCK', 'F_SETFL';
+#use DDP;
+use Sys::Hostname;
+
+our ($hostname) = hostname() =~ m{^([^.]+)};
+
+{
+	my $tzgen = int(time()/600)*600;
+	my $tzoff = timegm_nocheck( localtime($tzgen) ) - $tzgen;
+	sub localtime_c {
+		my $time = shift // time();
+		if ($time > $tzgen + 600) {
+			$tzgen = int($time/600)*600;
+			$tzoff = timegm_nocheck( localtime($tzgen) ) - $tzgen;
+		}
+		gmtime($time+$tzoff);
+	}
+	sub date {
+		my ($time,$ms) = Time::HiRes::gettimeofday();
+		if ($time > $tzgen + 600) {
+			$tzgen = int($time/600)*600;
+			$tzoff = timegm_nocheck( localtime($tzgen) ) - $tzgen;
+		}
+		#sprintf( "%s.%03d/%+0.3f",strftime("%Y-%m-%dT%H:%M:%S",gmtime($time+$tzoff)),int($ms/1000), EV::now() - $time - $ms/1e6 ), $time+$tzoff, int($ms/1000);
+		sprintf( "%s.%03d",strftime("%Y-%m-%dT%H:%M:%S",gmtime($time+$tzoff)),int($ms/1000) ), $time+$tzoff, int($ms/1000);
+	}
+}
+
+sub usage() {
+#	die "Usage:\n\t$0 -s scribe-host:scribe-port -c category   -f facility -p priority -n name\n"
+	die "Usage:\n\t$0 -s scribe-host:scribe-port -c category\n"
+}
+
+my $MAX_DELAYED = 1024;
+
+my $scribe;
+my $category;
+my $facility;
+my $prio;
+my $name;
+GetOptions(
+	's|scribe=s' => \$scribe,
+	'c|category=s' => \$category,
+#	'f|facility=s' => \$facility,
+#	'p|priority=s' => \$prio,
+#	'n|name=s' => \$name,
+) or usage();
+
+unless ($scribe or $facility) {
+	usage();
+}
+if ($scribe) {
+	usage() unless $category;
+}
+
+my $started;
+my $s;
+my %w;
+my @scribe_delayed;
+
+$w{int} = EV::signal 'INT', sub {
+	EV::unloop;
+};
+
+if ($scribe) {
+	my ($host,$port) = split /:/,$scribe,2;
+	$host ||= '127.0.0.1';
+	$port ||= 1463;
+	$s = EV::Scribe->new({
+		host => $host,
+		port => $port,
+		reconnect => 1,
+		connected => sub {
+			my $c = shift;
+			warn "Connected to scribe $scribe: @_\n";
+			if( my $n = @scribe_delayed ) {
+				$s->log(\@scribe_delayed, sub {
+					if (shift) {
+						
+					} else {
+						warn sprintf "Lost %d delayed messages while writing to scribe: @_\n", $n;
+					}
+				});
+				@scribe_delayed = ();
+			}
+			unless ($started) {
+				$started = 1;
+				start_read();
+			}
+		},
+		connfail => sub {
+			shift;
+			warn "Failed to connect to scribe $scribe: @_\n";
+		},
+		disconnected => sub {
+			my $c = shift;
+			warn "Disconnected from scribe $scribe".(@_ ? ": @_" : "")."\n";
+		},
+	});
+	$s->connect;
+}
+
+sub start_read {
+	my $buf;
+	my $fd = \*STDIN;
+	fcntl $fd,F_SETFL,O_NONBLOCK;
+	$w{io} = EV::io $fd, EV::READ, sub {
+		my $rd = sysread($fd, $buf, 1024*1024*4, length $buf);
+		return EV::unloop if $rd == 0;
+		#++$reads;
+		#$total += $rd;
+		my ($b,$e) = (0);
+		my @msgs;
+		my $scribe_ok = $scribe ? $s->ok : 0;
+		my ($date,$time,$ms) = date();
+		while (($e = index($buf,"\n", $b)) > -1) {
+			my $msg = \substr($buf,$b,$e-$b);
+			if ($scribe) {
+				my $msg = { category => $category, message => "$hostname $time:$ms $date $$msg" };
+				if ($scribe_ok) {
+					push @msgs, $msg;
+				}
+				elsif (@scribe_delayed < $MAX_DELAYED) {
+					push @scribe_delayed, $msg;
+				}
+				else {
+					shift @scribe_delayed;
+					push @scribe_delayed, $msg;
+				}
+			}
+			$b = $e+1;
+		}
+		if ($scribe_ok) {
+			my $n = @msgs;
+			$s->log(\@msgs, sub {
+				if (shift) {
+				} else {
+					warn sprintf "Lost %d messages while writing to scribe: @_\n", $n;
+				}
+			});
+			@msgs = ();
+		}
+		$buf = substr($buf,$b);
+	};
+}
+
+EV::loop;
+
+END {
+	%w = ();
+}

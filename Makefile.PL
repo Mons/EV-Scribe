@@ -40,4 +40,5 @@ WriteMakefile(
 			INC               => '-I/usr/include/c-ares19 -I. -I./evcnn/src -I./xsmy',
 		)};
 	},
+	EXE_FILES => [ 'ex/scribewriter' ],
 );

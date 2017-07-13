@@ -3,7 +3,7 @@
 #define NEED_my_snprintf
 #include "ppport.h"
 
-#include "xsendian.h"
+#include "portable_endian.h"
 #include <stdio.h>
 
 #ifndef I64
